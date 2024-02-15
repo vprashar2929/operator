@@ -6,11 +6,11 @@ help: ## Display this help.
 	@grep -E '^## [A-Z0-9_]+: ' Makefile | sed 's/^## \([A-Z0-9_]*\): \(.*\)/\1#\2/' | column -s'#' -t
 
 ## VERSION: Semantic version for release. Use a -dev[N] suffix for work in progress.
-VERSION?=0.0.8-dev4
+VERSION?=0.0.8
 ## IMG: Base name of image to build or deploy, without version tag.
 IMG?=quay.io/korrel8r/operator
 ## KORREL8R_IMAGE: Operand image containing the korrel8r executable.
-KORREL8R_IMAGE?=$(shell grep 'value:' config/default/manager_image_patch.yaml | sed 's/^\s*value:\s*//')
+KORREL8R_IMAGE?=quay.io/korrel8r/korrel8r:v0.5.8
 ## NAMESPACE: Operator namespace used by `make deploy` and `make bundle-run`
 NAMESPACE?=korrel8r
 ## IMGTOOL: May be podman or docker.
@@ -54,6 +54,8 @@ push-all: all image-push bundle-push ## Build and push all images.
 .PHONY: manifests
 manifests: $(MAKEFILES) controller-gen kustomize ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE)
+	cd config/default && $(KUSTOMIZE) edit set namespace $(NAMESPACE)
+	sed -i 's|value:.*|value: $(KORREL8R_IMAGE)|' config/default/manager_image_patch.yaml
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
@@ -88,15 +90,15 @@ image-push: image-build ## Push the manager image.
 ##@ Deployment
 
 .PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | kubectl apply -f -
 
 .PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
+uninstall: manifests ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/crd | kubectl delete --ignore-not-found -f -
 
 .PHONY: deploy
-deploy: install manifests kustomize image-push ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+deploy: install manifests image-push ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	$(KUSTOMIZE) build config/default | kubectl apply -f -
 
 .PHONY: undeploy
@@ -165,7 +167,7 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 
-bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
+bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
 	$(OPERATOR_SDK) generate kustomize manifests -q
 	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
 	$(OPERATOR_SDK) bundle validate ./bundle
@@ -187,8 +189,9 @@ bundle-clean: operator-sdk
 .PHONY: push-all
 push-all: image-push bundle-push
 
-push-latest:
-	docker push $(BUNDLE_IMAGE) $(IMG_TAG_BASE)-bundle:latest
+push-latest: push-all
+	docker push $(IMAGE) $(IMG):latest
+	docker push $(BUNDLE_IMAGE) $(IMG)-bundle:latest
 
 .PHONY: doc
 doc: doc/zz_api-ref.adoc
